@@ -1,41 +1,45 @@
-# Training configuration for retail forecasting
+# Optimized Training Configuration for Enhanced Retail Forecasting
 
-# environment configuration
+# Environment configuration with optimized dependencies
 settings:
   docker:
     required_integrations:
       - pandas
       - numpy
+      - scikit-learn
     requirements:
       - matplotlib>=3.5.0
-      - plotly
-      - prophet>=3.5.0
-      - pyarrow
-      - fastparquet
+      - plotly>=5.0.0
+      - prophet>=1.1.5
+      - pyarrow>=10.0.0
+      - fastparquet>=0.8.0
       - typing_extensions>=4.0.0
+      - scipy>=1.9.0
 
-# configuration of the Model Control Plane
+# Enhanced model configuration
 model:
-  name: retail_forecast_model
-  version: 0.1.0
+  name: optimized_retail_forecast_model
+  version: 2.0.0
   license: MIT
-  description: A retail forecast model with enhanced seasonality
-  tags: ["retail", "forecasting", "prophet", "seasonal"]
+  description: Advanced retail forecast model with hyperparameter optimization and enhanced features
+  tags: ["retail", "forecasting", "prophet", "optimized", "advanced", "hyperparameter-tuning"]
 
-# Step-specific parameters
+# Step-specific parameters for optimized pipeline
 steps:
   # Data loading parameters
   load_data: {}
   
-  # Data preprocessing parameters
+  # Advanced data preprocessing parameters
   preprocess_data:
     parameters:
       test_size: 0.2
       min_train_size: 50
-      outlier_threshold: 3.0
+      outlier_method: "modified_zscore"  # More robust than IQR
+      outlier_threshold: 3.5  # Slightly more conservative
       enable_feature_engineering: true
+      enable_advanced_features: true
   
-  # Model training parameters
+  # Optimized model training parameters
   train_model:
     parameters:
       # Seasonality settings optimized for limited data
@@ -44,10 +48,10 @@ steps:
       daily_seasonality: false   # Not useful for daily retail data
       seasonality_mode: "multiplicative"
       
-      # Regularization and constraints
-      changepoint_prior_scale: 0.05  # Reduced flexibility to prevent overfitting
-      seasonality_prior_scale: 1.0
-      holidays_prior_scale: 10.0  # Strength of holiday effects
+      # Regularization and constraints (fallback values)
+      changepoint_prior_scale: 0.05  # Will be optimized if tuning enabled
+      seasonality_prior_scale: 1.0   # Will be optimized if tuning enabled
+      holidays_prior_scale: 10.0     # Will be optimized if tuning enabled
       growth: "linear"
       
       # Additional Prophet parameters for better performance
@@ -58,6 +62,17 @@ steps:
       cap: null  # Will be set dynamically based on data
       floor: 0   # Sales cannot be negative
       use_regressors: true  # Enable weekend, promo, and other regressors
+      
+      # Hyperparameter optimization settings
+      enable_hyperparameter_tuning: true
+      max_optimization_evals: 16  # Increased for better optimization
+      use_warm_start: true  # Reuse optimal params across series
+  
+  # Enhanced model evaluation parameters
+  evaluate_model:
+    parameters:
+      calculate_residuals: true
+      residual_analysis: true
   
   # Forecasting parameters
   generate_forecasts:
