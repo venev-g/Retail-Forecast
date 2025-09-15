@@ -14,30 +14,55 @@ from zenml.types import HTMLString
 logger = logging.getLogger(__name__)
 
 
+def calculate_smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Calculate Symmetric Mean Absolute Percentage Error."""
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2
+    return 100 * np.mean(np.abs(y_true - y_pred) / np.maximum(denominator, 1e-8))
+
+
+def calculate_mase(y_true: np.ndarray, y_pred: np.ndarray, y_train: np.ndarray) -> float:
+    """Calculate Mean Absolute Scaled Error."""
+    # Calculate naive forecast error (seasonal naive for daily data)
+    naive_error = np.mean(np.abs(np.diff(y_train)))
+    if naive_error == 0:
+        naive_error = 1e-8
+    
+    mae = np.mean(np.abs(y_true - y_pred))
+    return mae / naive_error
+
+
 @step
 def evaluate_models(
     models: Dict[str, Prophet],
     test_data_dict: Dict[str, pd.DataFrame],
     series_ids: List[str],
-    forecast_horizon: int = 7,
+    forecast_horizon: int = 7, 
+    metrics: List[str] = ["mae", "rmse", "mape", "smape"],
+    cross_validation_periods: int = 5,
+    horizon_days: int = 7,
 ) -> Tuple[
     Annotated[Dict[str, float], "performance_metrics"],
     Annotated[HTMLString, "evaluation_report"],
 ]:
-    """Evaluate Prophet models on test data and log metrics.
+    """Evaluate Prophet models with comprehensive metrics and validation.
 
     Args:
         models: Dictionary of trained Prophet models
         test_data_dict: Dictionary of test data for each series
         series_ids: List of series identifiers
-        forecast_horizon: Number of future time periods to forecast
+        forecast_horizon: Number of periods to forecast
+        metrics: List of metrics to calculate
+        cross_validation_periods: Number of CV periods
+        horizon_days: Horizon for cross-validation
 
     Returns:
         performance_metrics: Dictionary of average metrics across all series
         evaluation_report: HTML report with evaluation metrics and visualizations
     """
-    # Initialize metrics storage
-    all_metrics = {"mae": [], "rmse": [], "mape": []}
+    # Initialize comprehensive metrics storage
+    all_metrics = {metric: [] for metric in metrics}
+    if "mase" in metrics:
+        all_metrics["mase"] = []
 
     series_metrics = {}
 
@@ -45,92 +70,111 @@ def evaluate_models(
     plt.figure(figsize=(12, len(series_ids) * 4))
 
     for i, series_id in enumerate(series_ids):
+        if series_id not in models:
+            logger.warning(f"No model found for {series_id}, skipping evaluation")
+            continue
+            
         logger.info(f"Evaluating model for {series_id}...")
         model = models[series_id]
         test_data = test_data_dict[series_id]
 
         # Debug: Check that test data exists
         logger.info(f"Test data shape for {series_id}: {test_data.shape}")
-        logger.info(
-            f"Test data date range: {test_data['ds'].min()} to {test_data['ds'].max()}"
-        )
+        logger.info(f"Test data date range: {test_data['ds'].min()} to {test_data['ds'].max()}")
 
-        # Create future dataframe starting from the FIRST test date, not from training data
-        future_dates = test_data["ds"].unique()
-        if len(future_dates) == 0:
-            logger.info(
-                f"WARNING: No test data dates for {series_id}, skipping evaluation"
+        # Prepare test data for prediction
+        test_future = test_data[['ds']].copy()
+        
+        # Handle additional regressors if they exist
+        regressor_cols = ['is_weekend', 'is_month_end', 'is_month_start']
+        for col in regressor_cols:
+            if col in test_data.columns:
+                test_future[col] = test_data[col]
+        
+        # Handle cap and floor for logistic growth
+        if model.growth == 'logistic' and 'cap' in test_data.columns:
+            test_future['cap'] = test_data['cap']
+        if 'floor' in test_data.columns:
+            test_future['floor'] = test_data['floor']
+
+        try:
+            # Make predictions for test dates
+            forecast = model.predict(test_future)
+            
+            logger.info(f"Forecast shape: {forecast.shape}")
+            logger.info(f"Forecast date range: {forecast['ds'].min()} to {forecast['ds'].max()}")
+
+            # Ensure non-negative predictions for retail data
+            forecast['yhat'] = np.maximum(forecast['yhat'], 0)
+            forecast['yhat_lower'] = np.maximum(forecast['yhat_lower'], 0)
+            forecast['yhat_upper'] = np.maximum(forecast['yhat_upper'], 0)
+
+            # Merge forecasts with test data
+            merged_data = pd.merge(
+                test_data[['ds', 'y']],
+                forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]],
+                on="ds",
+                how="inner",
             )
+
+            logger.info(f"Merged data shape: {merged_data.shape}")
+            if merged_data.empty:
+                logger.warning(f"No matching dates between test data and forecast for {series_id}")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Prediction failed for {series_id}: {str(e)}")
             continue
 
-        # Make predictions for test dates
-        forecast = model.predict(pd.DataFrame({"ds": future_dates}))
-
-        # Print debug info
-        logger.info(f"Forecast shape: {forecast.shape}")
-        logger.info(
-            f"Forecast date range: {forecast['ds'].min()} to {forecast['ds'].max()}"
-        )
-
-        # Merge forecasts with test data correctly
-        merged_data = pd.merge(
-            test_data,
-            forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]],
-            on="ds",
-            how="inner",  # Only keep matching dates
-        )
-
-        logger.info(f"Merged data shape: {merged_data.shape}")
-        if merged_data.empty:
-            logger.info(
-                f"WARNING: No matching dates between test data and forecast for {series_id}"
-            )
-            continue
-
-        # Calculate metrics only if we have merged data
+        # Calculate comprehensive metrics
         if len(merged_data) > 0:
-            # Calculate metrics
             actuals = merged_data["y"].values
             predictions = merged_data["yhat"].values
 
-            # Debug metrics calculation
             logger.info(f"Actuals range: {actuals.min()} to {actuals.max()}")
-            logger.info(
-                f"Predictions range: {predictions.min()} to {predictions.max()}"
-            )
+            logger.info(f"Predictions range: {predictions.min()} to {predictions.max()}")
 
-            mae = np.mean(np.abs(actuals - predictions))
-            rmse = np.sqrt(np.mean((actuals - predictions) ** 2))
-
-            # Handle zeros in actuals for MAPE calculation
-            mask = actuals != 0
-            if np.any(mask):
-                mape = (
-                    np.mean(
-                        np.abs(
-                            (actuals[mask] - predictions[mask]) / actuals[mask]
-                        )
-                    )
-                    * 100
-                )
-            else:
-                mape = np.nan
-
-            # Store metrics
-            series_metrics[series_id] = {
-                "mae": mae,
-                "rmse": rmse,
-                "mape": mape,
-            }
-
-            all_metrics["mae"].append(mae)
-            all_metrics["rmse"].append(rmse)
-            if not np.isnan(mape):
+            # Calculate basic metrics
+            series_metrics_dict = {}
+            
+            if "mae" in metrics:
+                mae = np.mean(np.abs(actuals - predictions))
+                series_metrics_dict["mae"] = mae
+                all_metrics["mae"].append(mae)
+            
+            if "rmse" in metrics:
+                rmse = np.sqrt(np.mean((actuals - predictions) ** 2))
+                series_metrics_dict["rmse"] = rmse
+                all_metrics["rmse"].append(rmse)
+            
+            if "mape" in metrics:
+                mask = actuals != 0
+                if np.any(mask):
+                    mape = np.mean(np.abs((actuals[mask] - predictions[mask]) / actuals[mask])) * 100
+                else:
+                    mape = np.nan
+                series_metrics_dict["mape"] = mape
                 all_metrics["mape"].append(mape)
+            
+            if "smape" in metrics:
+                smape = calculate_smape(actuals, predictions)
+                series_metrics_dict["smape"] = smape
+                all_metrics["smape"].append(smape)
+            
+            # For MASE, we would need training data
+            # if "mase" in metrics and series_id in train_data_dict:
+            #     train_data = train_data_dict[series_id]
+            #     mase = calculate_mase(actuals, predictions, train_data['y'].values)
+            #     series_metrics_dict["mase"] = mase
+            #     all_metrics["mase"].append(mase)
 
-            logger.info(
-                f"Metrics for {series_id}: MAE={mae:.2f}, RMSE={rmse:.2f}, MAPE={mape:.2f}%"
-            )
+            # Store metrics for this series
+            series_metrics[series_id] = series_metrics_dict
+
+            # Log metrics for this series
+            metric_str = ", ".join([f"{k.upper()}={v:.2f}" + ("%" if k == "mape" or k == "smape" else "") 
+                                   for k, v in series_metrics_dict.items() if not np.isnan(v)])
+            logger.info(f"Metrics for {series_id}: {metric_str}")
 
             # Plot the forecast vs actual for this series
             plt.subplot(len(series_ids), 1, i + 1)
@@ -149,21 +193,25 @@ def evaluate_models(
             plt.legend()
 
     # Calculate average metrics across all series
-    if not all_metrics["mae"]:
-        logger.info("WARNING: No valid metrics calculated!")
-        average_metrics = {
-            "avg_mae": np.nan,
-            "avg_rmse": np.nan,
-            "avg_mape": np.nan,
-        }
-    else:
-        average_metrics = {
-            "avg_mae": np.mean(all_metrics["mae"]),
-            "avg_rmse": np.mean(all_metrics["rmse"]),
-            "avg_mape": np.mean(all_metrics["mape"])
-            if all_metrics["mape"]
-            else np.nan,
-        }
+    average_metrics = {}
+    
+    for metric in metrics:
+        if metric in all_metrics and all_metrics[metric]:
+            # Filter out NaN values before calculating mean
+            valid_values = [v for v in all_metrics[metric] if not np.isnan(v)]
+            if valid_values:
+                average_metrics[f"avg_{metric}"] = np.mean(valid_values)
+                logger.info(f"Final Average {metric.upper()}: {average_metrics[f'avg_{metric}']:.2f}")
+            else:
+                average_metrics[f"avg_{metric}"] = np.nan
+                logger.warning(f"No valid {metric.upper()} values calculated")
+        else:
+            average_metrics[f"avg_{metric}"] = np.nan
+            logger.warning(f"No {metric.upper()} values found")
+    
+    if not average_metrics:
+        logger.error("No valid metrics calculated!")
+        average_metrics = {"avg_mae": np.nan, "avg_rmse": np.nan, "avg_mape": np.nan}
 
     # Save plot to buffer
     buf = BytesIO()

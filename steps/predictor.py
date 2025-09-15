@@ -129,9 +129,7 @@ def make_predictions(
             html_visualization,
         )
 
-    # Select device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    # Note: Prophet models don't need device selection like PyTorch models
 
     # Generate future dates for forecasting
     last_date = pd.to_datetime(test_data["date"].max())
@@ -218,7 +216,7 @@ def make_predictions(
         predictions, _ = model.predict(
             future_dataloader,
             return_x=True,
-            trainer_kwargs={"accelerator": device},
+            trainer_kwargs={"accelerator": "cpu"},
         )
 
         # Add predictions to the future dataframe
@@ -469,10 +467,23 @@ def generate_forecasts(
         # Get last date from training data
         last_date = train_data_dict[series_id]["ds"].max()
 
-        # Create future dataframe
+        # Create future dataframe with proper additional regressors
         future = model.make_future_dataframe(periods=forecast_periods)
+        
+        # Add additional regressors that were used during training
+        # These must match exactly what was used in preprocessing
+        future["weekday"] = future["ds"].dt.dayofweek
+        future["is_weekend"] = future["weekday"].isin([5, 6]).astype(int)
+        future["month"] = future["ds"].dt.month
+        future["day_of_month"] = future["ds"].dt.day
+        future["is_month_end"] = (future["ds"].dt.day >= 28).astype(int)
+        future["is_month_start"] = (future["ds"].dt.day <= 3).astype(int)
+        
+        # Note: Moving averages (sales_ma_7, sales_ma_14) cannot be computed for future dates
+        # as they require historical sales data that we don't have for forecasting period
+        # Prophet should handle this internally by not expecting these features for future predictions
 
-        # Generate forecast
+        # Generate forecast with regressors
         forecast = model.predict(future)
 
         # Store forecast

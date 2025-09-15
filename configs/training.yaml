@@ -30,15 +30,32 @@ steps:
   # Data preprocessing parameters
   preprocess_data:
     parameters:
-      test_size: 0.15
+      test_size: 0.2
+      min_train_size: 50
+      outlier_threshold: 3.0
+      enable_feature_engineering: true
   
   # Model training parameters
   train_model:
     parameters:
+      # Seasonality settings optimized for limited data
       weekly_seasonality: true
-      yearly_seasonality: true
-      daily_seasonality: true
-      seasonality_mode: "additive"
+      yearly_seasonality: false  # Disabled due to insufficient data (90 days)
+      daily_seasonality: false   # Not useful for daily retail data
+      seasonality_mode: "multiplicative"
+      
+      # Regularization and constraints
+      changepoint_prior_scale: 0.05  # Reduced flexibility to prevent overfitting
+      seasonality_prior_scale: 1.0
+      growth: "linear"
+      
+      # Additional Prophet parameters for better performance
+      interval_width: 0.95
+      mcmc_samples: 0  # Disable MCMC for faster training
+      
+      # Custom parameters for retail forecasting
+      cap: null  # Will be set dynamically based on data
+      floor: 0   # Sales cannot be negative
   
   # Forecasting parameters
   generate_forecasts:
