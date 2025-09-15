@@ -202,6 +202,4 @@ A retail chain with 50 stores and 500 products uses this pipeline to:
 The result: 15% reduction in stockouts and 20% decrease in excess inventory.
 
 
-## 📄 License
 
-This project is licensed under the Apache License 2.0.
