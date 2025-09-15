@@ -20,6 +20,11 @@ def optimize_hyperparameters(
     cv_horizon: str = '7 days',
     cv_initial: str = '21 days',
     cv_period: str = '3 days',
+    hyperparameter_grid: Optional[Dict] = None,
+    custom_seasonalities: Optional[Dict] = None,
+    regressors: Optional[Dict] = None,
+    cv_settings: Optional[Dict] = None,
+    random_seed: int = 42,
 ) -> Dict:
     """
     Optimize Prophet hyperparameters using cross-validation.
@@ -37,21 +42,27 @@ def optimize_hyperparameters(
     """
     logger.info("Starting hyperparameter optimization...")
     
-    # Define parameter grid based on latest Prophet best practices
-    param_grid = {
-        'changepoint_prior_scale': [0.001, 0.01, 0.05, 0.1, 0.5],
-        'seasonality_prior_scale': [0.01, 0.1, 1.0, 5.0, 10.0],
-        'holidays_prior_scale': [0.1, 1.0, 5.0, 10.0, 20.0],
-        'seasonality_mode': ['additive', 'multiplicative'],
-    }
+    # Use configurable parameter grid or fallback to defaults
+    if hyperparameter_grid:
+        param_grid = hyperparameter_grid
+        logger.info("Using hyperparameter grid from configuration")
+    else:
+        # Default parameter grid based on Prophet best practices
+        param_grid = {
+            'changepoint_prior_scale': [0.001, 0.01, 0.05, 0.1, 0.5],
+            'seasonality_prior_scale': [0.01, 0.1, 1.0, 5.0, 10.0],
+            'holidays_prior_scale': [0.1, 1.0, 5.0, 10.0, 20.0],
+            'seasonality_mode': ['additive', 'multiplicative'],
+        }
+        logger.info("Using default hyperparameter grid")
     
     # Generate all parameter combinations
     all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
     
     # Limit number of evaluations to prevent overfitting and save time
     if len(all_params) > max_evals:
-        # Select diverse combinations
-        np.random.seed(42)
+        # Select diverse combinations using configurable random seed
+        np.random.seed(random_seed)
         selected_indices = np.random.choice(len(all_params), max_evals, replace=False)
         all_params = [all_params[i] for i in selected_indices]
     
@@ -74,28 +85,48 @@ def optimize_hyperparameters(
                 **params
             )
             
-            # Add regressors if available
-            regressor_columns = ['is_weekend', 'is_promo', 'is_month_end', 'is_month_start']
+            # Add regressors if available using configurable regressor lists
+            if regressors:
+                regressor_columns = regressors.get('primary', []) + regressors.get('advanced', [])
+            else:
+                regressor_columns = ['is_weekend', 'is_promo', 'is_month_end', 'is_month_start']
+            
             for regressor in regressor_columns:
                 if regressor in train_data.columns:
                     m.add_regressor(regressor, mode=params.get('seasonality_mode', 'multiplicative'))
             
-            # Add monthly seasonality
-            if len(train_data) >= 28:
-                m.add_seasonality(name='monthly', period=30.5, fourier_order=3)
+            # Add custom seasonalities if configured
+            if custom_seasonalities:
+                for season_name, season_config in custom_seasonalities.items():
+                    if season_config.get('enabled', True):
+                        min_points = season_config.get('min_data_points', 28)
+                        if len(train_data) >= min_points:
+                            m.add_seasonality(
+                                name=season_name,
+                                period=season_config.get('period', 30.5),
+                                fourier_order=season_config.get('fourier_order', 3)
+                            )
+            else:
+                # Default monthly seasonality
+                if len(train_data) >= 28:
+                    m.add_seasonality(name='monthly', period=30.5, fourier_order=3)
             
             # Fit model
             m.fit(train_data)
             
-            # Perform cross-validation with limited data considerations
+            # Perform cross-validation with configurable settings
             try:
-                if len(train_data) >= 40:  # Sufficient data for CV
+                # Use configurable CV settings or defaults
+                min_cv_data = cv_settings.get('min_data_for_cv', 40) if cv_settings else 40
+                split_ratio = cv_settings.get('train_test_split_ratio', 0.8) if cv_settings else 0.8
+                
+                if len(train_data) >= min_cv_data:  # Sufficient data for CV
                     df_cv = cross_validation(m, initial=cv_initial, period=cv_period, horizon=cv_horizon)
                     df_p = performance_metrics(df_cv)
                     rmse = df_p['rmse'].mean()
                 else:
                     # Use simple train-test split for limited data
-                    cutoff = int(len(train_data) * 0.8)
+                    cutoff = int(len(train_data) * split_ratio)
                     train_subset = train_data.iloc[:cutoff]
                     test_subset = train_data.iloc[cutoff:]
                     
@@ -103,8 +134,22 @@ def optimize_hyperparameters(
                     for regressor in regressor_columns:
                         if regressor in train_data.columns:
                             m_temp.add_regressor(regressor, mode=params.get('seasonality_mode', 'multiplicative'))
-                    if len(train_data) >= 28:
-                        m_temp.add_seasonality(name='monthly', period=30.5, fourier_order=3)
+                    
+                    # Add custom seasonalities to temp model
+                    if custom_seasonalities:
+                        for season_name, season_config in custom_seasonalities.items():
+                            if season_config.get('enabled', True):
+                                min_points = season_config.get('min_data_points', 28)
+                                if len(train_data) >= min_points:
+                                    m_temp.add_seasonality(
+                                        name=season_name,
+                                        period=season_config.get('period', 30.5),
+                                        fourier_order=season_config.get('fourier_order', 3)
+                                    )
+                    else:
+                        # Default seasonality
+                        if len(train_data) >= 28:
+                            m_temp.add_seasonality(name='monthly', period=30.5, fourier_order=3)
                     
                     m_temp.fit(train_subset)
                     forecast = m_temp.predict(test_subset)
@@ -146,6 +191,14 @@ def create_advanced_prophet_model(
     best_params: Dict,
     series_id: str,
     use_regressors: bool = True,
+    custom_seasonalities: Optional[Dict] = None,
+    regressors: Optional[Dict] = None,
+    weekly_seasonality: bool = True,
+    yearly_seasonality: bool = False,
+    daily_seasonality: bool = False,
+    growth: str = "linear",
+    interval_width: float = 0.95,
+    mcmc_samples: int = 0,
 ) -> Prophet:
     """
     Create an advanced Prophet model with optimized parameters and features.
@@ -167,59 +220,85 @@ def create_advanced_prophet_model(
     
     model = Prophet(
         holidays=holiday_dataframe if not holiday_dataframe.empty else None,
-        weekly_seasonality=True,
-        yearly_seasonality=False,  # Limited to 90 days of data
-        daily_seasonality=False,
-        growth='linear',  # Always use linear growth for stability
-        interval_width=0.95,
-        mcmc_samples=0,  # Use MAP estimation for speed
+        weekly_seasonality=weekly_seasonality,
+        yearly_seasonality=yearly_seasonality,
+        daily_seasonality=daily_seasonality,
+        growth=growth,
+        interval_width=interval_width,
+        mcmc_samples=mcmc_samples,
         **prophet_params
     )
     
-    # Add custom seasonalities based on retail patterns
-    if len(train_data) >= 28:  # At least 4 weeks
-        # Monthly seasonality for end-of-month effects
-        model.add_seasonality(name='monthly', period=30.5, fourier_order=3)
-        logger.info(f"Added monthly seasonality for {series_id}")
+    # Add custom seasonalities using configuration
+    if custom_seasonalities:
+        for season_name, season_config in custom_seasonalities.items():
+            if season_config.get('enabled', True):
+                min_points = season_config.get('min_data_points', 28)
+                if len(train_data) >= min_points:
+                    model.add_seasonality(
+                        name=season_name,
+                        period=season_config.get('period', 30.5),
+                        fourier_order=season_config.get('fourier_order', 3)
+                    )
+                    logger.info(f"Added {season_name} seasonality (period={season_config.get('period')}) for {series_id}")
+    else:
+        # Default retail patterns if no configuration
+        if len(train_data) >= 28:  # At least 4 weeks
+            model.add_seasonality(name='monthly', period=30.5, fourier_order=3)
+            logger.info(f"Added monthly seasonality for {series_id}")
+        
+        if len(train_data) >= 14:  # At least 2 weeks
+            model.add_seasonality(name='biweekly', period=14, fourier_order=2)
+            logger.info(f"Added bi-weekly seasonality for {series_id}")
     
-    if len(train_data) >= 14:  # At least 2 weeks
-        # Bi-weekly patterns (payday effects)
-        model.add_seasonality(name='biweekly', period=14, fourier_order=2)
-        logger.info(f"Added bi-weekly seasonality for {series_id}")
-    
-    # Add regressors with mode matching seasonality_mode
+    # Add regressors using configuration
     if use_regressors:
         regressor_mode = best_params.get('seasonality_mode', 'multiplicative')
         
-        # Primary regressors
-        if 'is_weekend' in train_data.columns:
-            model.add_regressor('is_weekend', mode=regressor_mode)
-            logger.info(f"Added is_weekend regressor (mode: {regressor_mode}) for {series_id}")
-        
-        if 'is_promo' in train_data.columns:
-            model.add_regressor('is_promo', mode=regressor_mode)
-            logger.info(f"Added is_promo regressor (mode: {regressor_mode}) for {series_id}")
-        
-        # Secondary regressors for retail patterns
-        if 'is_month_end' in train_data.columns:
-            model.add_regressor('is_month_end', mode=regressor_mode)
-            logger.info(f"Added is_month_end regressor (mode: {regressor_mode}) for {series_id}")
-        
-        if 'is_month_start' in train_data.columns:
-            model.add_regressor('is_month_start', mode=regressor_mode)
-            logger.info(f"Added is_month_start regressor (mode: {regressor_mode}) for {series_id}")
-        
-        # Advanced regressors if available
-        advanced_regressors = ['is_payday', 'is_quarter_end', 'is_summer', 'is_winter']
-        for regressor in advanced_regressors:
-            if regressor in train_data.columns:
-                model.add_regressor(regressor, mode=regressor_mode)
-                logger.info(f"Added {regressor} regressor (mode: {regressor_mode}) for {series_id}")
-        
-        # Add price elasticity if price data is available
-        if 'price_change' in train_data.columns:
-            model.add_regressor('price_change', mode='multiplicative')
-            logger.info(f"Added price_change regressor for {series_id}")
+        if regressors:
+            # Use configured regressors
+            primary_regressors = regressors.get('primary', [])
+            advanced_regressors = regressors.get('advanced', [])
+            special_regressors = regressors.get('special', [])
+            
+            # Add primary regressors
+            for regressor in primary_regressors:
+                if regressor in train_data.columns:
+                    model.add_regressor(regressor, mode=regressor_mode)
+                    logger.info(f"Added {regressor} regressor (mode: {regressor_mode}) for {series_id}")
+            
+            # Add advanced regressors
+            for regressor in advanced_regressors:
+                if regressor in train_data.columns:
+                    model.add_regressor(regressor, mode=regressor_mode)
+                    logger.info(f"Added {regressor} regressor (mode: {regressor_mode}) for {series_id}")
+            
+            # Add special regressors (with specific modes)
+            for regressor in special_regressors:
+                if regressor in train_data.columns:
+                    # Special regressors like price_change use multiplicative mode
+                    special_mode = 'multiplicative' if regressor == 'price_change' else regressor_mode
+                    model.add_regressor(regressor, mode=special_mode)
+                    logger.info(f"Added {regressor} regressor (mode: {special_mode}) for {series_id}")
+        else:
+            # Default regressors if no configuration
+            default_regressors = ['is_weekend', 'is_promo', 'is_month_end', 'is_month_start']
+            for regressor in default_regressors:
+                if regressor in train_data.columns:
+                    model.add_regressor(regressor, mode=regressor_mode)
+                    logger.info(f"Added {regressor} regressor (mode: {regressor_mode}) for {series_id}")
+            
+            # Default advanced regressors
+            advanced_regressors = ['is_payday', 'is_quarter_end', 'is_summer', 'is_winter']
+            for regressor in advanced_regressors:
+                if regressor in train_data.columns:
+                    model.add_regressor(regressor, mode=regressor_mode)
+                    logger.info(f"Added {regressor} regressor (mode: {regressor_mode}) for {series_id}")
+            
+            # Default special regressors
+            if 'price_change' in train_data.columns:
+                model.add_regressor('price_change', mode='multiplicative')
+                logger.info(f"Added price_change regressor for {series_id}")
     
     return model
 
@@ -245,6 +324,13 @@ def train_model(
     enable_hyperparameter_tuning: bool = False,
     max_optimization_evals: int = 12,
     use_warm_start: bool = True,
+    # New configurable parameters from YAML
+    hyperparameter_grid: Optional[Dict] = None,
+    custom_seasonalities: Optional[Dict] = None,
+    regressors: Optional[Dict] = None,
+    cv_settings: Optional[Dict] = None,
+    random_seed: int = 42,
+    min_training_points: int = 10,
 ) -> Annotated[Dict[str, Prophet], "trained_prophet_models"]:
     """Train optimized Prophet models for each store-item combination with advanced features.
 
@@ -293,9 +379,9 @@ def train_model(
         try:
             train_data = train_data_dict[series_id].copy()
             
-            # Data validation
-            if len(train_data) < 10:
-                logger.warning(f"Insufficient training data for {series_id}: {len(train_data)} points")
+            # Data validation using configurable threshold
+            if len(train_data) < min_training_points:
+                logger.warning(f"Insufficient training data for {series_id}: {len(train_data)} points (minimum: {min_training_points})")
                 failed_series.append(series_id)
                 continue
             
@@ -309,10 +395,24 @@ def train_model(
             # Hyperparameter optimization (first series or when not using warm start)
             if enable_hyperparameter_tuning and (global_best_params is None or not use_warm_start):
                 logger.info(f"Optimizing hyperparameters for {series_id}")
+                
+                # Get CV settings for optimization
+                cv_horizon = cv_settings.get('horizon', '7 days') if cv_settings else '7 days'
+                cv_initial = cv_settings.get('initial', '21 days') if cv_settings else '21 days'
+                cv_period = cv_settings.get('period', '3 days') if cv_settings else '3 days'
+                
                 series_best_params = optimize_hyperparameters(
                     train_data=train_data,
                     holiday_dataframe=holiday_dataframe,
-                    max_evals=max_optimization_evals
+                    max_evals=max_optimization_evals,
+                    cv_horizon=cv_horizon,
+                    cv_initial=cv_initial,
+                    cv_period=cv_period,
+                    hyperparameter_grid=hyperparameter_grid,
+                    custom_seasonalities=custom_seasonalities,
+                    regressors=regressors,
+                    cv_settings=cv_settings,
+                    random_seed=random_seed,
                 )
                 
                 # Use warm start: reuse best params for subsequent series
@@ -332,19 +432,24 @@ def train_model(
             
             logger.info(f"Training {series_id} with parameters: {current_params}")
 
-            # Create advanced Prophet model
+            # Create advanced Prophet model with configurable parameters
             model = create_advanced_prophet_model(
                 holiday_dataframe=holiday_dataframe,
                 train_data=train_data,
                 best_params=current_params,
                 series_id=series_id,
-                use_regressors=use_regressors
+                use_regressors=use_regressors,
+                custom_seasonalities=custom_seasonalities,
+                regressors=regressors,
+                weekly_seasonality=weekly_seasonality,
+                yearly_seasonality=yearly_seasonality,
+                daily_seasonality=daily_seasonality,
+                growth=growth,
+                interval_width=interval_width,
+                mcmc_samples=mcmc_samples,
             )
             
-            # Configure additional Prophet settings
-            model.growth = 'linear'  # Force linear growth to avoid cap_scaled issues
-            model.interval_width = interval_width
-            model.mcmc_samples = mcmc_samples
+            # Model is now fully configured through parameters, no hardcoded overrides needed
             
             logger.info(f"Model for {series_id} configured with {len(holiday_dataframe)} holidays and regressors: {use_regressors}")
 
