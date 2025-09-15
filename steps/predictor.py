@@ -470,12 +470,12 @@ def generate_forecasts(
         # Create future dataframe with proper additional regressors
         future = model.make_future_dataframe(periods=forecast_periods)
         
-        # Add additional regressors that were used during training
+        # Add all advanced regressors that were used during training
         # These must match exactly what was used in preprocessing
         future["weekday"] = future["ds"].dt.dayofweek
         future["month"] = future["ds"].dt.month
         
-        # Main regressors (must match training data)
+        # Main regressors (must match training data exactly)
         future["is_weekend"] = future["weekday"].isin([5, 6]).astype(int)
         
         # Holiday detection for future dates (simple logic - should match preprocessing)
@@ -492,12 +492,29 @@ def generate_forecasts(
             ((future["ds"].dt.month.isin([6, 11, 12])) & (future["ds"].dt.day <= 5))  # Seasonal promos
         ).astype(int)
         
-        # Additional retail features
+        # Additional retail features that match training
         future["is_month_end"] = (future["ds"].dt.day >= 28).astype(int)
         future["is_month_start"] = (future["ds"].dt.day <= 3).astype(int)
         
+        # Advanced features added during optimization
+        future["is_payday"] = (
+            (future["ds"].dt.day == 15) | 
+            (future["ds"].dt.day >= 28)
+        ).astype(int)
+        
+        future["is_quarter_end"] = (
+            (future["ds"].dt.month.isin([3, 6, 9, 12])) & 
+            (future["ds"].dt.day >= 28)
+        ).astype(int)
+        
+        future["is_summer"] = future["ds"].dt.month.isin([6, 7, 8]).astype(int)
+        future["is_winter"] = future["ds"].dt.month.isin([12, 1, 2]).astype(int)
+        
         # Ensure all regressor columns are properly typed
-        regressor_columns = ['is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start']
+        regressor_columns = [
+            'is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start',
+            'is_payday', 'is_quarter_end', 'is_summer', 'is_winter'
+        ]
         for col in regressor_columns:
             if col in future.columns:
                 future[col] = future[col].astype(int)
