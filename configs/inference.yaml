@@ -36,4 +36,4 @@ steps:
   # Forecasting parameters
   generate_forecasts:
     parameters:
-      forecast_periods: 30 
+      forecast_periods: 60 
