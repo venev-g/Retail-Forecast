@@ -473,11 +473,34 @@ def generate_forecasts(
         # Add additional regressors that were used during training
         # These must match exactly what was used in preprocessing
         future["weekday"] = future["ds"].dt.dayofweek
-        future["is_weekend"] = future["weekday"].isin([5, 6]).astype(int)
         future["month"] = future["ds"].dt.month
-        future["day_of_month"] = future["ds"].dt.day
+        
+        # Main regressors (must match training data)
+        future["is_weekend"] = future["weekday"].isin([5, 6]).astype(int)
+        
+        # Holiday detection for future dates (simple logic - should match preprocessing)
+        future["is_holiday"] = (
+            (future["ds"].dt.day == 1) |  # First day of month
+            (future["ds"].dt.day == 15) |  # Mid-month
+            ((future["ds"].dt.month == 1) & (future["ds"].dt.day == 1)) |  # New Year
+            ((future["ds"].dt.month == 12) & (future["ds"].dt.day == 25))  # Christmas
+        ).astype(int)
+        
+        # Promotional periods (simulate typical retail promotion patterns)
+        future["is_promo"] = (
+            (future["ds"].dt.day.isin([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])) |  # Mid-month promos
+            ((future["ds"].dt.month.isin([6, 11, 12])) & (future["ds"].dt.day <= 5))  # Seasonal promos
+        ).astype(int)
+        
+        # Additional retail features
         future["is_month_end"] = (future["ds"].dt.day >= 28).astype(int)
         future["is_month_start"] = (future["ds"].dt.day <= 3).astype(int)
+        
+        # Ensure all regressor columns are properly typed
+        regressor_columns = ['is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start']
+        for col in regressor_columns:
+            if col in future.columns:
+                future[col] = future[col].astype(int)
         
         # Note: Moving averages (sales_ma_7, sales_ma_14) cannot be computed for future dates
         # as they require historical sales data that we don't have for forecasting period

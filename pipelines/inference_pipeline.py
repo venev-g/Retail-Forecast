@@ -34,7 +34,7 @@ def inference_pipeline():
     )
 
     # Preprocess data
-    train_data_dict, test_data_dict, series_ids = preprocess_data(
+    train_data_dict, test_data_dict, series_ids, holiday_df = preprocess_data(
         sales_data=sales_data_validated,
         test_size=0.05,  # Just a small test set for visualization purposes
     )

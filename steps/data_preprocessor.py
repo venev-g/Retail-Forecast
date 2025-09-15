@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -19,24 +20,116 @@ def detect_outliers(series: pd.Series, threshold: float = 3.0) -> pd.Series:
     return (series < lower_bound) | (series > upper_bound)
 
 
-def add_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Add time-based and retail-specific features."""
+def load_calendar_features() -> pd.DataFrame:
+    """Load calendar features from the calendar.csv file."""
+    try:
+        data_dir = os.path.join(os.getcwd(), "data")
+        calendar_path = os.path.join(data_dir, "calendar.csv")
+        
+        if os.path.exists(calendar_path):
+            calendar_df = pd.read_csv(calendar_path)
+            calendar_df['date'] = pd.to_datetime(calendar_df['date'])
+            logger.info(f"Loaded calendar features with shape: {calendar_df.shape}")
+            return calendar_df
+        else:
+            logger.warning("calendar.csv not found, generating basic calendar features")
+            return None
+    except Exception as e:
+        logger.error(f"Error loading calendar features: {e}")
+        return None
+
+
+def create_holiday_dataframe(calendar_df: pd.DataFrame) -> pd.DataFrame:
+    """Create a holiday dataframe for Prophet from calendar data.
+    
+    Args:
+        calendar_df: Calendar dataframe with is_holiday column
+        
+    Returns:
+        DataFrame with columns 'ds' and 'holiday' for Prophet
+    """
+    if calendar_df is None or 'is_holiday' not in calendar_df.columns:
+        return pd.DataFrame(columns=['ds', 'holiday'])
+    
+    # Get holiday dates
+    holiday_dates = calendar_df[calendar_df['is_holiday'] == 1]['date'].tolist()
+    
+    holidays = []
+    for date in holiday_dates:
+        # Simple holiday naming based on date patterns
+        holiday_name = 'Holiday'
+        
+        # Specific holiday naming
+        if date.month == 1 and date.day == 1:
+            holiday_name = 'New Year'
+        elif date.month == 1 and date.day == 15:
+            holiday_name = 'Mid Month Holiday'
+        elif date.month == 2 and date.day == 1:
+            holiday_name = 'February Holiday'
+        elif date.month == 2 and date.day == 15:
+            holiday_name = 'Mid February Holiday'
+        elif date.month == 3 and date.day == 1:
+            holiday_name = 'March Holiday'
+        elif date.month == 3 and date.day == 15:
+            holiday_name = 'Mid March Holiday'
+        
+        holidays.append({
+            'ds': date,
+            'holiday': holiday_name
+        })
+    
+    holiday_df = pd.DataFrame(holidays) if holidays else pd.DataFrame(columns=['ds', 'holiday'])
+    logger.info(f"Created holiday dataframe with {len(holiday_df)} holidays")
+    return holiday_df
+
+
+def add_features(data: pd.DataFrame, calendar_df: pd.DataFrame = None) -> pd.DataFrame:
+    """Add time-based and retail-specific features for Prophet."""
     data = data.copy()
     
-    # Time-based features
-    data['weekday'] = data['ds'].dt.dayofweek
-    data['is_weekend'] = data['weekday'].isin([5, 6]).astype(int)
-    data['month'] = data['ds'].dt.month
-    data['day_of_month'] = data['ds'].dt.day
+    # If calendar data is available, merge it
+    if calendar_df is not None:
+        # Merge with calendar data to get the proper features
+        data_with_calendar = data.merge(
+            calendar_df[['date', 'weekday', 'month', 'is_weekend', 'is_holiday', 'is_promo']], 
+            left_on='ds', 
+            right_on='date', 
+            how='left'
+        ).drop('date', axis=1)
+        
+        # Fill any missing values for dates not in calendar
+        data_with_calendar['weekday'] = data_with_calendar['weekday'].fillna(data['ds'].dt.dayofweek)
+        data_with_calendar['month'] = data_with_calendar['month'].fillna(data['ds'].dt.month)
+        data_with_calendar['is_weekend'] = data_with_calendar['is_weekend'].fillna(
+            data['ds'].dt.dayofweek.isin([5, 6]).astype(int)
+        )
+        data_with_calendar['is_holiday'] = data_with_calendar['is_holiday'].fillna(0)
+        data_with_calendar['is_promo'] = data_with_calendar['is_promo'].fillna(0)
+        
+        data = data_with_calendar
+    else:
+        # Generate basic features if no calendar data
+        data['weekday'] = data['ds'].dt.dayofweek
+        data['month'] = data['ds'].dt.month
+        data['is_weekend'] = data['weekday'].isin([5, 6]).astype(int)
+        data['is_holiday'] = 0  # No holiday information available
+        data['is_promo'] = 0   # No promo information available
     
-    # Retail-specific features
+    # Additional retail-specific features (as regressors)
     data['is_month_end'] = (data['ds'].dt.day >= 28).astype(int)
     data['is_month_start'] = (data['ds'].dt.day <= 3).astype(int)
     
-    # Moving averages for trend
+    # Moving averages for trend analysis (not used as regressors in Prophet)
     data['sales_ma_7'] = data['y'].rolling(window=7, min_periods=1).mean()
     data['sales_ma_14'] = data['y'].rolling(window=14, min_periods=1).mean()
     
+    # Ensure all regressor columns are numeric
+    regressor_columns = ['is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start']
+    for col in regressor_columns:
+        if col in data.columns:
+            data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0).astype(int)
+    
+    logger.info(f"Added features. Columns: {list(data.columns)}")
     return data
 
 
@@ -51,6 +144,7 @@ def preprocess_data(
     Annotated[Dict[str, pd.DataFrame], "training_data"],
     Annotated[Dict[str, pd.DataFrame], "testing_data"],
     Annotated[List[str], "series_identifiers"],
+    Annotated[pd.DataFrame, "holiday_dataframe"],
 ]:
     """Prepare data for forecasting with Prophet with enhanced preprocessing.
 
@@ -65,8 +159,15 @@ def preprocess_data(
         train_data_dict: Dictionary of training dataframes for each series
         test_data_dict: Dictionary of test dataframes for each series
         series_ids: List of unique series identifiers (store-item combinations)
+        holiday_dataframe: Holiday dataframe for Prophet
     """
     logger.info(f"Preprocessing sales data with shape: {sales_data.shape}")
+
+    # Load calendar features
+    calendar_df = load_calendar_features()
+    
+    # Create holiday dataframe for Prophet
+    holiday_df = create_holiday_dataframe(calendar_df)
 
     # Convert date to datetime
     sales_data["date"] = pd.to_datetime(sales_data["date"])
@@ -119,7 +220,7 @@ def preprocess_data(
         
         # Add features if enabled
         if enable_feature_engineering:
-            prophet_data = add_features(prophet_data)
+            prophet_data = add_features(prophet_data, calendar_df)
 
         # Ensure we have enough training data
         min_test_points = max(1, int(len(prophet_data) * test_size))
@@ -172,4 +273,4 @@ def preprocess_data(
         f"  Test date range: {sample_test['ds'].min()} to {sample_test['ds'].max()}"
     )
 
-    return train_data_dict, test_data_dict, series_ids
+    return train_data_dict, test_data_dict, series_ids, holiday_df

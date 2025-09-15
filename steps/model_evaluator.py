@@ -85,11 +85,14 @@ def evaluate_models(
         # Prepare test data for prediction
         test_future = test_data[['ds']].copy()
         
-        # Handle additional regressors if they exist
-        regressor_cols = ['is_weekend', 'is_month_end', 'is_month_start']
+        # Handle all additional regressors if they exist (must match training)
+        regressor_cols = ['is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start']
         for col in regressor_cols:
             if col in test_data.columns:
                 test_future[col] = test_data[col]
+                logger.debug(f"Added regressor {col} to test future dataframe for {series_id}")
+            else:
+                logger.warning(f"Regressor {col} not found in test data for {series_id}")
         
         # Handle cap and floor for logistic growth
         if model.growth == 'logistic' and 'cap' in test_data.columns:

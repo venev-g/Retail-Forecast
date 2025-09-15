@@ -31,6 +31,7 @@ steps:
   preprocess_data:
     parameters:
       test_size: 0.05  # Small test set for visualization only
+      enable_feature_engineering: true  # Enable calendar features and regressors
   
   # Forecasting parameters
   generate_forecasts:

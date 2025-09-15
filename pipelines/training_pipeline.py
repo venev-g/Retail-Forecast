@@ -50,7 +50,7 @@ def training_pipeline() -> Tuple[
     )
 
     # Preprocess data for Prophet
-    train_data_dict, test_data_dict, series_ids = preprocess_data(
+    train_data_dict, test_data_dict, series_ids, holiday_df = preprocess_data(
         sales_data=sales_data_validated
     )
 
@@ -66,6 +66,7 @@ def training_pipeline() -> Tuple[
     models = train_model(
         train_data_dict=train_data_dict,
         series_ids=series_ids,
+        holiday_dataframe=holiday_df,
     )
 
     # Evaluate models

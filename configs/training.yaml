@@ -47,6 +47,7 @@ steps:
       # Regularization and constraints
       changepoint_prior_scale: 0.05  # Reduced flexibility to prevent overfitting
       seasonality_prior_scale: 1.0
+      holidays_prior_scale: 10.0  # Strength of holiday effects
       growth: "linear"
       
       # Additional Prophet parameters for better performance
@@ -56,6 +57,7 @@ steps:
       # Custom parameters for retail forecasting
       cap: null  # Will be set dynamically based on data
       floor: 0   # Sales cannot be negative
+      use_regressors: true  # Enable weekend, promo, and other regressors
   
   # Forecasting parameters
   generate_forecasts:
