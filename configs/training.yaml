@@ -27,7 +27,7 @@ model:
 # Pipeline-level parameters that match the training_pipeline function signature
 parameters:
   # Data preprocessing parameters (optimized defaults)
-  test_size: 0.2
+  test_size: 0.25
   min_train_size: 50
   outlier_method: "modified_zscore"  # More robust than IQR
   outlier_threshold: 3.5  # Slightly more conservative
