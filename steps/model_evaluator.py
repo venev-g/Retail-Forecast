@@ -82,17 +82,58 @@ def evaluate_models(
         logger.info(f"Test data shape for {series_id}: {test_data.shape}")
         logger.info(f"Test data date range: {test_data['ds'].min()} to {test_data['ds'].max()}")
 
-        # Prepare test data for prediction
+        # Prepare test data for prediction with all advanced features
         test_future = test_data[['ds']].copy()
         
-        # Handle all additional regressors if they exist (must match training)
-        regressor_cols = ['is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start']
+        # Add all advanced regressors that match training (must be consistent)
+        regressor_cols = [
+            'is_weekend', 'is_holiday', 'is_promo', 'is_month_end', 'is_month_start',
+            'is_payday', 'is_quarter_end', 'is_summer', 'is_winter'
+        ]
+        
         for col in regressor_cols:
             if col in test_data.columns:
                 test_future[col] = test_data[col]
                 logger.debug(f"Added regressor {col} to test future dataframe for {series_id}")
             else:
-                logger.warning(f"Regressor {col} not found in test data for {series_id}")
+                # Generate missing features for test data to match training
+                if col == 'is_payday':
+                    # Paydays typically on 15th and last day of month
+                    test_future[col] = (
+                        (test_future['ds'].dt.day == 15) | 
+                        (test_future['ds'].dt.day >= 28)
+                    ).astype(int)
+                elif col == 'is_quarter_end':
+                    test_future[col] = (
+                        (test_future['ds'].dt.month.isin([3, 6, 9, 12])) & 
+                        (test_future['ds'].dt.day >= 28)
+                    ).astype(int)
+                elif col == 'is_summer':
+                    test_future[col] = test_future['ds'].dt.month.isin([6, 7, 8]).astype(int)
+                elif col == 'is_winter':
+                    test_future[col] = test_future['ds'].dt.month.isin([12, 1, 2]).astype(int)
+                else:
+                    # Default generation for other missing regressors
+                    if col == 'is_weekend':
+                        test_future[col] = test_future['ds'].dt.dayofweek.isin([5, 6]).astype(int)
+                    elif col == 'is_holiday':
+                        test_future[col] = (
+                            (test_future['ds'].dt.day == 1) |
+                            (test_future['ds'].dt.day == 15)
+                        ).astype(int)
+                    elif col == 'is_promo':
+                        test_future[col] = (
+                            (test_future['ds'].dt.day >= 10) & 
+                            (test_future['ds'].dt.day <= 20)
+                        ).astype(int)
+                    elif col == 'is_month_end':
+                        test_future[col] = (test_future['ds'].dt.day >= 28).astype(int)
+                    elif col == 'is_month_start':
+                        test_future[col] = (test_future['ds'].dt.day <= 3).astype(int)
+                    else:
+                        test_future[col] = 0
+                
+                logger.info(f"Generated missing regressor {col} for test data for {series_id}")
         
         # Handle cap and floor for logistic growth
         if model.growth == 'logistic' and 'cap' in test_data.columns:
