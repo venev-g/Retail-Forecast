@@ -1,6 +1,8 @@
 from steps.data_loader import load_data
 from steps.data_preprocessor import preprocess_data
+from steps.data_validator import validate_data
 from steps.data_visualizer import visualize_sales_data
+from steps.model_evaluator import evaluate_models
 from steps.predictor import generate_forecasts
 from zenml import get_pipeline_context, pipeline
 
@@ -25,9 +27,15 @@ def inference_pipeline():
     # Load data
     sales_data = load_data()
 
+    # Validate data quality and fix common issues
+    sales_data_validated, _ = validate_data(
+        sales_data=sales_data,
+        calendar_data=sales_data  # Using sales data as calendar proxy for now
+    )
+
     # Preprocess data
     train_data_dict, test_data_dict, series_ids = preprocess_data(
-        sales_data=sales_data,
+        sales_data=sales_data_validated,
         test_size=0.05,  # Just a small test set for visualization purposes
     )
 
@@ -44,6 +52,13 @@ def inference_pipeline():
         "trained_prophet_models"
     )
 
+    # Evaluate models on current data for quality control
+    metrics, evaluation_report = evaluate_models(
+        models=models, 
+        test_data_dict=test_data_dict, 
+        series_ids=series_ids
+    )
+
     # Generate forecasts
     _, combined_forecast, forecast_dashboard = generate_forecasts(
         models=models,
@@ -51,5 +66,5 @@ def inference_pipeline():
         series_ids=series_ids,
     )
 
-    # Return forecast data and dashboard
-    return combined_forecast, forecast_dashboard, sales_viz
+    # Return forecast data, dashboard, and quality metrics
+    return combined_forecast, forecast_dashboard, sales_viz, metrics, evaluation_report

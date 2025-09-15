@@ -2,6 +2,7 @@ from typing import Dict, Tuple
 
 from steps.data_loader import load_data
 from steps.data_preprocessor import preprocess_data
+from steps.data_validator import validate_data
 from steps.data_visualizer import visualize_sales_data
 from steps.model_evaluator import evaluate_models
 from steps.model_trainer import train_model
@@ -42,9 +43,15 @@ def training_pipeline() -> Tuple[
     # Load synthetic retail data
     sales_data = load_data()
 
+    # Validate data quality and fix common issues
+    sales_data_validated, _ = validate_data(
+        sales_data=sales_data,
+        calendar_data=sales_data  # Using sales data as calendar proxy for now
+    )
+
     # Preprocess data for Prophet
     train_data_dict, test_data_dict, series_ids = preprocess_data(
-        sales_data=sales_data
+        sales_data=sales_data_validated
     )
 
     # Create interactive visualizations of historical sales patterns
