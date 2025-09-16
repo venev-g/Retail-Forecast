@@ -139,17 +139,17 @@ def optimize_hyperparameters(
                     if custom_seasonalities:
                         for season_name, season_config in custom_seasonalities.items():
                             if season_config.get('enabled', True):
-                                min_points = season_config.get('min_data_points', 28)
+                                min_points = season_config.get('min_data_points')
                                 if len(train_data) >= min_points:
                                     m_temp.add_seasonality(
                                         name=season_name,
-                                        period=season_config.get('period', 30.5),
-                                        fourier_order=season_config.get('fourier_order', 3)
+                                        period=season_config.get('period'),
+                                        fourier_order=season_config.get('fourier_order')
                                     )
-                    else:
-                        # Default seasonality
-                        if len(train_data) >= 28:
-                            m_temp.add_seasonality(name='monthly', period=30.5, fourier_order=3)
+                    # else:
+                    #     # Default seasonality
+                    #     if len(train_data) >= 28:
+                    #         m_temp.add_seasonality(name='monthly', period=30.5, fourier_order=3)
                     
                     m_temp.fit(train_subset)
                     forecast = m_temp.predict(test_subset)

@@ -86,11 +86,11 @@ steps:
       
       # Custom seasonality configuration
       custom_seasonalities:
-        monthly:
-          period: 30.5
-          fourier_order: 3
-          enabled: true
-          min_data_points: 28  # At least 4 weeks of data required
+        # monthly:
+        #   period: 30.5
+        #   fourier_order: 3
+        #   enabled: true
+        #   min_data_points: 28  # At least 4 weeks of data required
         biweekly:
           period: 14
           fourier_order: 2
